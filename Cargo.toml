@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 bip39 = "1.0.1"
 miniscript = "5.1.0"
+bitcoin = { version="0.26.0", features=["base64"] }

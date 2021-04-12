@@ -1,20 +1,28 @@
 use std::str::FromStr;
 
 use bip39::Mnemonic;
-use miniscript::bitcoin::{
-	secp256k1::Secp256k1,
+use bitcoin::{
+	secp256k1::{Message, Secp256k1},
 	network::constants::Network,
 	util::bip32::{
     	ExtendedPrivKey, ExtendedPubKey, DerivationPath
-	}
+	},
+    util::bip143,
+    util::psbt::PartiallySignedTransaction,
+    base64,
+    consensus::encode::{serialize, deserialize},
+    blockdata::script::Script,
+    blockdata::transaction::SigHashType
 };
 use miniscript::{
-    DescriptorTrait, DescriptorPublicKey, TranslatePk2
+    DescriptorTrait, DescriptorPublicKey, TranslatePk2,
+    psbt::{extract, finalize}
 };
+use bitcoin::hashes::hex::ToHex;
 
 fn main() {
-	// Bitcoin mainnet
-    let net = Network::Bitcoin;
+	// Bitcoin regtest. Mainnet is Network::Bitcoin
+    let net = Network::Regtest;
     // bip-39 recovery phrase
     let mnemonic = Mnemonic::parse(
     	"carbon exile split receive diet either hunt lava math amount hover sheriff"
@@ -31,7 +39,7 @@ fn main() {
     let fingerprint = root.fingerprint(&secp_ctx);
 
     // default path for bip-84 (native segwit)
-    let path = "m/84h/0h/0h";
+    let path = "m/84h/1h/0h";
     let derivation = DerivationPath::from_str(path).unwrap();
     // child private key
     let child = root.derive_priv(&secp_ctx, &derivation).unwrap();
@@ -54,4 +62,54 @@ fn main() {
             .address(net).unwrap();
         println!("{}", addr);
     }
+
+    println!("");
+    // Transaction signing
+    let b64psbt = "cHNidP8BAHICAAAAAd8V9dM+cq5O2ZEQy4h4JWgVmat6v2WslAGyeR24AIJVAQAAAAD9////AnK9agAAAAAAFgAU0wICXbWyOFTyJWDMa2Xi9EDRVS3Axi0AAAAAABepFESE916yXwmgo3en89d0APg5Y3H4hwAAAAAAAQBxAgAAAAHNn9+mQdYz22Yvv9lDWF70ikNlocKcYQ6p6qaXhnlzIAAAAAAA/v///wL0wt4iAQAAABYAFIAUoRggqHw8rI0983dKLl3svJ5UgJaYAAAAAAAWABQo7Ad4T5KvYMrqXEfoAHm8n3Vh9AAAAAABAR+AlpgAAAAAABYAFCjsB3hPkq9gyupcR+gAebyfdWH0IgYDgeHshAILosyB/jBLXGZFWjXh0ydf0ZBN7A6vF9ShYLwYFVcuZVQAAIABAACAAAAAgAAAAAAAAAAAACICA0VKNSTVMgQmrmbW0byWWq24aDvmQIR5ujFpH7rYH5fCGBVXLmVUAACAAQAAgAAAAIABAAAAAAAAAAAA";
+    let raw = base64::decode(b64psbt).unwrap();
+    let mut psbt:PartiallySignedTransaction = deserialize(&raw).unwrap();
+    // sign all inputs
+    for (i, inp) in psbt.inputs.iter_mut().enumerate() {
+        // find matching derivations
+        for (pubkey, derivation) in inp.bip32_derivation.iter() {
+            // check fingerprint
+            if fingerprint == derivation.0 {
+                // derive private key
+                let pk = root.derive_priv(&secp_ctx, &derivation.1)
+                             .unwrap()
+                             .private_key;
+
+                // Calculate and sign the transaction hash
+                // p2pkh script is a special case for segwit single-sig
+                // In other cases we can use witness_script from psbt input, or redeem script / scriptpubkey for legacy
+                // Can be refactored and moved to the beginning of per-input loop
+                let sc = Script::new_p2pkh(
+                    &pk.public_key(&secp_ctx).pubkey_hash()
+                );
+                let value = match &inp.witness_utxo {
+                    Some(utxo) => utxo.value,
+                    _ => panic!("utxo is missing")
+                };
+                // hash to sign
+                let h = bip143::SigHashCache::new(&psbt.global.unsigned_tx).signature_hash(
+                    i, &sc, value, SigHashType::All
+                ).as_hash();
+                let sig = secp_ctx.sign(
+                    &Message::from_slice(&h).unwrap(),
+                    &pk.key,
+                );
+                let mut final_signature = Vec::with_capacity(75);
+                final_signature.extend_from_slice(&sig.serialize_der());
+                final_signature.push(SigHashType::All.as_u32() as u8);
+
+                inp.partial_sigs.insert(pubkey.clone(), final_signature);
+            }
+        }
+    }
+    let signed = base64::encode(&serialize(&psbt));
+    println!("Signed PSBT transaction:\n{}\n", signed);
+
+    finalize(&mut psbt, &secp_ctx).unwrap();
+    let rawtx = extract(&psbt, &secp_ctx).unwrap();
+    println!("Raw transaction to broadcast:\n{}", serialize(&rawtx).to_hex());
 }
