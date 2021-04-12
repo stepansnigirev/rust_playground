@@ -2,11 +2,11 @@ use std::str::FromStr;
 
 use bip39::Mnemonic;
 use bitcoin::{
-	secp256k1::{Message, Secp256k1},
-	network::constants::Network,
-	util::bip32::{
-    	ExtendedPrivKey, ExtendedPubKey, DerivationPath
-	},
+    secp256k1::{Message, Secp256k1},
+    network::constants::Network,
+    util::bip32::{
+        ExtendedPrivKey, ExtendedPubKey, DerivationPath
+    },
     util::bip143,
     util::psbt::PartiallySignedTransaction,
     base64,
@@ -21,11 +21,11 @@ use miniscript::{
 use bitcoin::hashes::hex::ToHex;
 
 fn main() {
-	// Bitcoin regtest. Mainnet is Network::Bitcoin
+    // Bitcoin regtest. Mainnet is Network::Bitcoin
     let net = Network::Regtest;
     // bip-39 recovery phrase
     let mnemonic = Mnemonic::parse(
-    	"carbon exile split receive diet either hunt lava math amount hover sheriff"
+        "carbon exile split receive diet either hunt lava math amount hover sheriff"
     ).unwrap();
     // mnemonic to seed with empty password
     let seed = mnemonic.to_seed("");
